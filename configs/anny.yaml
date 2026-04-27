@@ -20,7 +20,7 @@ repos:
       - AGENTS.md
 workspace:
   root: ~/code/anny/worktrees
-  script: ~/bin/create-workspace.sh
+  # script: ~/bin/create-workspace.sh  # Not used — opens editor and blocks. Generic worktree mode instead.
 agent:
   model: claude-opus-4.6
   thinking: high
