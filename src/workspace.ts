@@ -175,6 +175,21 @@ export async function createWorkspace(
         throw new Error(`Failed to create worktree for "${repoName}": ${result.stderr}`);
       }
 
+      // Symlink node_modules from the main repo into the worktree
+      // so tools like MCP servers that need dependencies work properly
+      const mainNodeModules = path.join(repo.path, "node_modules");
+      const wtNodeModules = path.join(worktreePath, "node_modules");
+      if (fs.existsSync(mainNodeModules) && !fs.existsSync(wtNodeModules)) {
+        fs.symlinkSync(mainNodeModules, wtNodeModules, "dir");
+      }
+
+      // Also symlink vendor/ for PHP repos (Laravel)
+      const mainVendor = path.join(repo.path, "vendor");
+      const wtVendor = path.join(worktreePath, "vendor");
+      if (fs.existsSync(mainVendor) && !fs.existsSync(wtVendor)) {
+        fs.symlinkSync(mainVendor, wtVendor, "dir");
+      }
+
       created.push({ repoPath: repo.path, worktreePath });
       paths[repoKey] = worktreePath;
     }
