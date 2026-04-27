@@ -44,33 +44,27 @@ export function detectExistingWorkspace(
   config: ResolvedConfig,
   branchSlug: string,
 ): Record<string, string> | null {
+  // Strip any prefix to get the dir slug
   const slug = branchSlug.replace(/^fix\//, "");
   const sessionDir = path.resolve(config.workspace.root, slug);
+
+  if (!fs.existsSync(sessionDir)) return null;
+
   const paths: Record<string, string> = {};
 
   for (const [repoKey, repo] of Object.entries(config.repos)) {
     const repoName = repo.name ?? repoKey;
-    const worktreePath = path.join(sessionDir, repoName);
+    // Try both the repo name and the key as dir names
+    let worktreePath = path.join(sessionDir, repoName);
+    if (!fs.existsSync(worktreePath)) {
+      worktreePath = path.join(sessionDir, repoKey);
+    }
 
     if (!fs.existsSync(worktreePath)) {
       return null;
     }
 
-    // Verify git actually knows about this worktree
-    try {
-      const list = execSync("git worktree list --porcelain", {
-        cwd: repo.path,
-        stdio: ["pipe", "pipe", "pipe"],
-        encoding: "utf-8",
-      });
-      if (!list.includes(`worktree ${worktreePath}`)) {
-        return null;
-      }
-    } catch {
-      return null;
-    }
-
-    paths[repoName] = worktreePath;
+    paths[repoKey] = worktreePath;
   }
 
   return Object.keys(paths).length > 0 ? paths : null;
@@ -96,12 +90,32 @@ export async function createWorkspace(
   title?: string,
 ): Promise<Record<string, string>> {
   const branchSlug = buildBranchSlug(taskId, title);
-  const slug = branchSlug.replace(/^fix\//, "");
+
+  // For custom scripts, build the arg in the script's expected format
+  // (e.g., create-workspace.sh expects "CU-<id>_<name>" or just "<name>")
+  const scriptArg = taskId
+    ? `CU-${taskId}_${slugify(title || "bugfix")}`
+    : slugify(title || `bugfix-${Date.now()}`);
+
+  // The dir slug the script will create (matches the script's own slugify)
+  // We check both our slug and the script arg format for existing workspaces
+  const possibleSlugs = [
+    branchSlug.replace(/^fix\//, ""),
+    scriptArg.toLowerCase().replace(/[^a-z0-9_-]/g, "-"),
+    scriptArg,
+  ];
 
   // ── Check for existing workspace first ──────────────────────────
-  const existing = detectExistingWorkspace(config, branchSlug);
-  if (existing) {
-    return existing;
+  for (const slug of possibleSlugs) {
+    const existing = detectExistingWorkspace(config, `fix/${slug}`);
+    if (existing) {
+      return existing;
+    }
+    // Also try without fix/ prefix
+    const existing2 = detectExistingWorkspace(config, slug);
+    if (existing2) {
+      return existing2;
+    }
   }
 
   // ── Mode 1: custom script ───────────────────────────────────────
@@ -115,33 +129,60 @@ export async function createWorkspace(
     }
 
     try {
-      execSync(`${script} ${slug}`, {
-        cwd: config.workspace.root,
+      execSync(`${quote(script)} ${quote(scriptArg)}`, {
         stdio: "pipe",
       });
     } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : String(err);
+      const stderr = (err as any)?.stderr?.toString?.() || "";
+      const msg = stderr || (err instanceof Error ? err.message : String(err));
       throw new Error(
-        `Workspace script failed (${script} ${slug}): ${msg}`,
+        `Workspace script failed (${script} ${scriptArg}): ${msg.trim()}`,
       );
     }
 
-    // Derive paths from convention: <root>/<slug>/<repoName>/
+    // Derive paths — the script creates dirs at <root>/<slug>/<repoName>/
+    // The script slugifies the arg its own way, so scan the workspace root
+    // for a directory matching the task ID
     const paths: Record<string, string> = {};
+    const wsRoot = config.workspace.root;
+    const candidates = fs.existsSync(wsRoot)
+      ? fs.readdirSync(wsRoot).filter((d) => {
+          const lower = d.toLowerCase();
+          const argLower = scriptArg.toLowerCase();
+          return lower === argLower || lower.includes(taskId?.toLowerCase() ?? "---never---");
+        })
+      : [];
+
+    const sessionDir = candidates.length > 0
+      ? path.resolve(wsRoot, candidates[0])
+      : path.resolve(wsRoot, scriptArg);
+
     for (const [repoKey, repo] of Object.entries(config.repos)) {
+      // Try repo.name first, then the key
       const repoName = repo.name ?? repoKey;
-      const worktreePath = path.resolve(
-        config.workspace.root,
-        slug,
-        repoName,
-      );
-      paths[repoName] = worktreePath;
+      const worktreePath = path.join(sessionDir, repoName);
+      if (fs.existsSync(worktreePath)) {
+        paths[repoKey] = worktreePath;
+      } else {
+        // Also try common names (anny-ui, bookings-api)
+        const altPath = path.join(sessionDir, repoKey);
+        if (fs.existsSync(altPath)) {
+          paths[repoKey] = altPath;
+        }
+      }
     }
+
+    if (Object.keys(paths).length === 0) {
+      throw new Error(
+        `Workspace script ran successfully but no worktree directories found at ${sessionDir}/`,
+      );
+    }
+
     return paths;
   }
 
   // ── Mode 2: generic git-worktree fallback ───────────────────────
+  const slug = branchSlug.replace(/^fix\//, "");
   const sessionDir = path.resolve(config.workspace.root, slug);
   fs.mkdirSync(sessionDir, { recursive: true });
 
