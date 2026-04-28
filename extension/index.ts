@@ -387,14 +387,42 @@ export default function (pi: ExtensionAPI) {
 
   // ── Update state when MRs are created ───────────────────────────
   pi.on("tool_result", async (event, ctx) => {
-    if (event.toolName === "create_mr" && state) {
-      // Extract MR URL from the tool result details (more reliable than shared state mutation)
+    if (!state) return;
+
+    if (event.toolName === "create_mr") {
       const details = event.details as { repo?: string; url?: string; skipped?: boolean } | undefined;
       if (details?.repo && details?.url && !details?.skipped) {
         state.createdMrs[details.repo] = details.url;
+        updateStatusLine(ctx);
+        persistState();
       }
-      updateStatusLine(ctx);
-      persistState();
+    }
+
+    // Catch MR/PR URLs created via bash fallback (agent used glab/gh directly)
+    if (event.toolName === "bash") {
+      const text = Array.isArray(event.content)
+        ? event.content.map((c: any) => c.type === "text" ? c.text : "").join("")
+        : "";
+
+      const mrUrl =
+        text.match(/https:\/\/gitlab\.com\/[^\s]+\/-\/merge_requests\/\d+/)?.[0] ??
+        text.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0];
+
+      if (mrUrl && !Object.values(state.createdMrs).includes(mrUrl)) {
+        // Match URL to a repo by name
+        const repoKey = Object.entries(state.config.repos).find(([key, repo]) => {
+          const name = (repo.name ?? key).toLowerCase();
+          const dirName = repo.path.split("/").pop()?.toLowerCase() ?? "";
+          const urlLower = mrUrl.toLowerCase();
+          return urlLower.includes(name) || urlLower.includes(dirName);
+        })?.[0];
+
+        if (repoKey) {
+          state.createdMrs[repoKey] = mrUrl;
+          updateStatusLine(ctx);
+          persistState();
+        }
+      }
     }
   });
 }

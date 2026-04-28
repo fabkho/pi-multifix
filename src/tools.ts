@@ -130,7 +130,6 @@ export function registerCreateMrTool(
           [
             "mr",
             "create",
-            "--fill",
             "--title",
             params.title,
             "--description",
