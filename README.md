@@ -1,4 +1,4 @@
-# bugfix-agent
+# pi-multifix
 
 A [pi](https://github.com/badlogic/pi-mono) extension for fixing bugs across multiple repositories. Fetches issues from ClickUp (or free-text), creates isolated git worktree workspaces, analyzes and fixes the bug, creates merge requests, and posts results back to the issue tracker.
 
@@ -12,46 +12,41 @@ A [pi](https://github.com/badlogic/pi-mono) extension for fixing bugs across mul
 - **MR/PR creation** — `create_mr` tool pushes and opens merge requests via `glab` (GitLab) or `gh` (GitHub)
 - **Scout subagents** — delegates research to cheaper/faster models via [@tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents)
 - **Project configs** — YAML-based per-project configuration, reusable across different multi-repo setups
+- **Session persistence** — bugfix state survives reloads and session resume
+- **Status line** — footer shows active bug + MR count
 
-## Prerequisites
+## Install
 
-- [pi](https://github.com/badlogic/pi-mono) installed
-- [@tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents) installed (`pi install npm:@tintinweb/pi-subagents`)
+```bash
+pi install npm:pi-multifix
+```
+
+Or from git:
+
+```bash
+pi install git:github.com/fabkho/pi-multifix
+```
+
+### Prerequisites
+
+- [pi](https://github.com/badlogic/pi-mono)
+- [@tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents) (`pi install npm:@tintinweb/pi-subagents`)
 - `glab` (GitLab CLI) and/or `gh` (GitHub CLI) installed and authenticated
 - `CLICKUP_API_TOKEN` environment variable set (for ClickUp mode)
 
-## Setup
+### Setup
 
 ```bash
-# 1. Clone
-git clone git@github.com:fabkho/bugfix-agent.git ~/code/bugfix-agent
-cd ~/code/bugfix-agent
-npm install
-
-# 2. Add the extension to pi settings (~/.pi/agent/settings.json)
-```
-
-Add to your `settings.json`:
-
-```json
-{
-  "extensions": [
-    "/path/to/bugfix-agent/extension/index.ts"
-  ]
-}
-```
-
-```bash
-# 3. Create your project config
-mkdir -p ~/.config/bugfix-agent
-cp configs/anny.yaml ~/.config/bugfix-agent/my-project.yaml
+# 1. Create your project config
+mkdir -p ~/.config/pi-multifix
+cp configs/anny.yaml ~/.config/pi-multifix/my-project.yaml
 # Edit with your repos, paths, tokens
 
-# 4. Set a default project (optional — avoids --project flag)
-echo "my-project" > ~/.config/bugfix-agent/default
+# 2. Set a default project (optional — avoids --project flag)
+echo "my-project" > ~/.config/pi-multifix/default
 
-# 5. Symlink the scout agent (optional — for subagent research)
-ln -sf ~/code/bugfix-agent/agents/bugfix-scout.md ~/.pi/agent/agents/bugfix-scout.md
+# 3. Symlink the scout agent (optional — for subagent research)
+ln -sf "$(npm root -g)/pi-multifix/agents/bugfix-scout.md" ~/.pi/agent/agents/bugfix-scout.md
 ```
 
 ## Usage
@@ -67,38 +62,30 @@ ln -sf ~/code/bugfix-agent/agents/bugfix-scout.md ~/.pi/agent/agents/bugfix-scou
 /bugfix --project other-project CU-99999                   # different project config
 ```
 
-### Check status
-
-```
-/bugfix-status
-```
-
-Shows current session: project, bug details, worktree paths, created MR URLs.
-
 ### Merge and close
 
 ```
-/bugfix-done                                              # merge MR(s), update ClickUp
+/bugfix-done                                              # merge MR(s), update tracker
 /bugfix-done "Simple i18n fix, no backend changes needed"  # with a comment
 ```
 
-Merges all MR(s) created in the session, updates ClickUp status to "code review", and optionally posts your comment.
+Merges all MR(s) created in the session, updates issue tracker status (if `doneStatus` configured), and optionally posts your comment.
 
 ## What happens when you run `/bugfix`
 
-1. **Loads project config** from `~/.config/bugfix-agent/<project>.yaml`
+1. **Loads project config** from `~/.config/pi-multifix/<project>.yaml`
 2. **Fetches the bug** from ClickUp (or creates a headless bug from your text)
-3. **Creates worktrees** for each repo on a `fix/<task-id>_<slug>` branch
+3. **Creates worktrees** for each repo on a fresh branch
 4. **Symlinks** `node_modules` and `vendor/` from the main repos
 5. **Injects a system prompt** with repo paths, codebase conventions, and workflow instructions
 6. **The agent analyzes** the bug across all repos, determines root cause
 7. **Fixes the code**, using scout subagents for research to keep context lean
 8. **Creates MR(s)** via `glab mr create` / `gh pr create`
-9. **Posts MR links** back to the ClickUp task
+9. **Posts MR links** back to the issue tracker
 
 ## Project Config
 
-YAML config files live at `~/.config/bugfix-agent/<name>.yaml`.
+YAML config files live at `~/.config/pi-multifix/<name>.yaml`.
 
 ### Minimal config (defaults handle the rest)
 
@@ -122,6 +109,8 @@ name: my-project
 
 issueTracker:
   type: clickup                       # clickup | headless (default: headless)
+  doneStatus: code review             # status set by /bugfix-done (default: skip)
+  branchPrefix: CU-                   # auto-set per tracker type, override here
   clickup:                            # adapter-specific config nested under type name
     tokenEnv: CLICKUP_API_TOKEN       # env var holding the API token
   # linear:                           # future: Linear adapter config
@@ -158,6 +147,8 @@ agent:
 | Field | Default |
 |-------|---------|
 | `issueTracker.type` | `headless` |
+| `issueTracker.branchPrefix` | `CU-` (clickup), none (headless) |
+| `issueTracker.doneStatus` | none (skip status update) |
 | `repos.*.remote` | `origin` |
 | `repos.*.baseBranch` | `main` |
 | `repos.*.platform` | `gitlab` |
@@ -169,8 +160,8 @@ agent:
 ### Config resolution order
 
 1. `--project <name>` flag on the command
-2. `BUGFIX_AGENT_PROJECT` environment variable
-3. `~/.config/bugfix-agent/default` file contents
+2. `MULTIFIX_PROJECT` environment variable
+3. `~/.config/pi-multifix/default` file contents
 
 ### Context files
 

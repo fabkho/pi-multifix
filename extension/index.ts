@@ -1,5 +1,5 @@
 /**
- * bugfix-agent — Pi extension for multi-repo bugfixing.
+ * pi-multifix — Pi extension for multi-repo bugfixing.
  *
  * Registers:
  *   /bugfix <task-id|text> [repo=<name>] [--project <name>] [extra context...]

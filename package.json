@@ -1,5 +1,5 @@
 {
-  "name": "bugfix-agent",
+  "name": "pi-multifix",
   "version": "0.1.0",
   "type": "module",
   "description": "Pi extension for multi-repo bugfixing — ClickUp to MR in one command",
@@ -7,8 +7,16 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/fabkho/bugfix-agent"
+    "url": "https://github.com/fabkho/pi-multifix"
   },
+  "files": [
+    "extension",
+    "src",
+    "prompts",
+    "agents",
+    "skills",
+    "configs"
+  ],
   "pi": {
     "extensions": ["./extension/index.ts"],
     "skills": ["./skills"]

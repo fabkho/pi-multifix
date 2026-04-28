@@ -66,7 +66,7 @@ export interface ResolvedConfig extends Omit<ProjectConfig, "repos"> {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-const CONFIG_DIR = join(homedir(), ".config", "bugfix-agent");
+const CONFIG_DIR = join(homedir(), ".config", "pi-multifix");
 
 /** Default branch prefixes per tracker type (for automation triggers) */
 const DEFAULT_BRANCH_PREFIXES: Record<string, string> = {
@@ -95,7 +95,7 @@ function readFileSafe(path: string): string | undefined {
 function resolveProjectName(explicit?: string): string {
   if (explicit) return explicit;
 
-  const fromEnv = process.env.BUGFIX_AGENT_PROJECT;
+  const fromEnv = process.env.MULTIFIX_PROJECT;
   if (fromEnv) return fromEnv;
 
   const defaultFile = join(CONFIG_DIR, "default");
@@ -103,7 +103,7 @@ function resolveProjectName(explicit?: string): string {
   if (fromFile) return fromFile;
 
   throw new Error(
-    "No project name provided. Pass it explicitly, set BUGFIX_AGENT_PROJECT, " +
+    "No project name provided. Pass it explicitly, set MULTIFIX_PROJECT, " +
       `or create ${defaultFile} with the default project name.`,
   );
 }
