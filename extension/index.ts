@@ -244,11 +244,31 @@ export default function (pi: ExtensionAPI) {
 
   // ── /bugfix-status command ─────────────────────────────────────
   pi.registerCommand("bugfix-status", {
-    description: "Show current bugfix session state",
-    handler: async (_args, ctx) => {
+    description: "Show current bugfix session state. Pass MR URLs to add them manually:\n" +
+      "  /bugfix-status\n" +
+      "  /bugfix-status frontend=https://gitlab.com/.../merge_requests/123",
+    handler: async (args, ctx) => {
       if (!state) {
         ctx.ui.notify("No active bugfix session. Run /bugfix first.", "info");
         return;
+      }
+
+      // Parse manual MR URL additions: frontend=https://...
+      if (args?.trim()) {
+        const pairs = args.trim().split(/\s+/);
+        for (const pair of pairs) {
+          const eqIdx = pair.indexOf("=");
+          if (eqIdx > 0) {
+            const repo = pair.slice(0, eqIdx);
+            const url = pair.slice(eqIdx + 1);
+            if (url.startsWith("http")) {
+              state.createdMrs[repo] = url;
+            }
+          }
+        }
+        updateStatusLine(ctx);
+        persistState();
+        ctx.ui.notify("MR URLs updated.", "info");
       }
 
       const lines = [
@@ -265,7 +285,7 @@ export default function (pi: ExtensionAPI) {
         ),
       ];
       if (Object.keys(state.createdMrs).length === 0) {
-        lines.push("  (none yet)");
+        lines.push("  (none yet — add manually: /bugfix-status repo=https://...)");
       }
       ctx.ui.notify(lines.join("\n"), "info");
     },
