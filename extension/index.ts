@@ -3,10 +3,14 @@
  *
  * Registers:
  *   /bugfix <task-id|text> [repo=<name>] [--project <name>] [extra context...]
+ *   /bugfix-status  — show current session state
+ *   /bugfix-done [comment] — merge MRs, update tracker
  *   create_mr tool
  *   update_issue tool
  */
 
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { resolveConfig, type ResolvedConfig } from "../src/config.js";
 import {
@@ -14,7 +18,6 @@ import {
   type Bug,
   type IssueAdapter,
 } from "../src/adapters/index.js";
-import { ClickUpAdapter } from "../src/adapters/clickup.js";
 import { HeadlessAdapter } from "../src/adapters/headless.js";
 import { createWorkspace, type ExecFn } from "../src/workspace.js";
 import { renderPrompt } from "../src/prompt.js";
@@ -23,6 +26,18 @@ import {
   registerUpdateIssueTool,
   type BugfixState,
 } from "../src/tools.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/** Serializable subset of BugfixState for session persistence */
+interface PersistedState {
+  projectName: string;
+  bug: Bug;
+  trackerType: string;
+  trackerConfig: Record<string, unknown>;
+  workspacePaths: Record<string, string>;
+  createdMrs: Record<string, string>;
+}
 
 export default function (pi: ExtensionAPI) {
   // ── Session state ──────────────────────────────────────────────
@@ -40,6 +55,45 @@ export default function (pi: ExtensionAPI) {
   registerCreateMrTool(pi, getState);
   registerUpdateIssueTool(pi, getState);
 
+  // ── Resource discovery — register agents + prompts dirs ────────
+  pi.on("resources_discover", async (_event, _ctx) => {
+    const packageRoot = path.resolve(__dirname, "..");
+    return {
+      skillPaths: [path.join(packageRoot, "skills")],
+      promptPaths: [path.join(packageRoot, "prompts")],
+    };
+  });
+
+  // ── State persistence — restore on session start ───────────────
+  pi.on("session_start", async (_event, ctx) => {
+    state = null;
+
+    // Scan session entries for persisted bugfix state
+    for (const entry of ctx.sessionManager.getEntries()) {
+      if (entry.type === "custom" && entry.customType === "bugfix-state") {
+        try {
+          const persisted = entry.data as PersistedState;
+          const config = resolveConfig(persisted.projectName);
+          const adapter = createAdapter(config.issueTracker);
+
+          state = {
+            config,
+            bug: persisted.bug,
+            adapter,
+            workspacePaths: persisted.workspacePaths,
+            createdMrs: persisted.createdMrs,
+          };
+
+          // Restore status line
+          updateStatusLine(ctx);
+        } catch {
+          // Config or adapter might have changed — ignore stale state
+          state = null;
+        }
+      }
+    }
+  });
+
   // ── Inject system prompt on next agent turn ────────────────────
   pi.on("before_agent_start", async (event, _ctx) => {
     if (!pendingSystemPrompt) return;
@@ -51,6 +105,44 @@ export default function (pi: ExtensionAPI) {
       systemPrompt: event.systemPrompt + "\n\n" + prompt,
     };
   });
+
+  // ── Status line helper ─────────────────────────────────────────
+  function updateStatusLine(ctx: { hasUI: boolean; ui: any }) {
+    if (!ctx.hasUI || !state) return;
+    const theme = ctx.ui.theme;
+
+    const bugLabel = state.bug.id !== "headless"
+      ? `${state.bug.id}`
+      : "headless";
+
+    const repos = Object.keys(state.workspacePaths).join(", ");
+    const mrCount = Object.keys(state.createdMrs).length;
+    const mrPart = mrCount > 0
+      ? theme.fg("success", ` | ${mrCount} MR${mrCount > 1 ? "s" : ""}`)
+      : "";
+
+    ctx.ui.setStatus(
+      "bugfix",
+      theme.fg("accent", "🔧 ") +
+      theme.fg("dim", bugLabel) +
+      theme.fg("muted", ` | ${repos}`) +
+      mrPart,
+    );
+  }
+
+  // ── Persist state helper ───────────────────────────────────────
+  function persistState() {
+    if (!state) return;
+    const persisted: PersistedState = {
+      projectName: state.config.name,
+      bug: state.bug,
+      trackerType: state.config.issueTracker.type,
+      trackerConfig: state.config.issueTracker as unknown as Record<string, unknown>,
+      workspacePaths: state.workspacePaths,
+      createdMrs: state.createdMrs,
+    };
+    pi.appendEntry("bugfix-state", persisted);
+  }
 
   // ── /bugfix command ────────────────────────────────────────────
   pi.registerCommand("bugfix", {
@@ -83,7 +175,6 @@ export default function (pi: ExtensionAPI) {
         let bug: Bug;
 
         if (parsed.isHeadless) {
-          // Free-text mode — no tracker fetch
           adapter = new HeadlessAdapter();
           bug = await adapter.fetchIssue(parsed.taskRef);
         } else {
@@ -110,13 +201,23 @@ export default function (pi: ExtensionAPI) {
         // ── 4. Store session state ───────────────────────────────
         state = { config, bug, adapter, workspacePaths, createdMrs: {} };
 
-        // ── 5. Render system prompt ──────────────────────────────
+        // ── 5. Name the session + status line ────────────────────
+        const sessionLabel = bug.id !== "headless"
+          ? `${bug.id}: ${bug.title.slice(0, 60)}`
+          : bug.title.slice(0, 60);
+        pi.setSessionName(`🔧 ${sessionLabel}`);
+        updateStatusLine(ctx);
+
+        // ── 6. Persist state ─────────────────────────────────────
+        persistState();
+
+        // ── 7. Render system prompt ──────────────────────────────
         pendingSystemPrompt = renderPrompt(config, bug, workspacePaths, {
           repoHint: parsed.repoHint,
           extraContext: parsed.extraContext,
         });
 
-        // ── 6. Send kickoff message ──────────────────────────────
+        // ── 8. Send kickoff message ──────────────────────────────
         const repoInstruction = buildRepoInstruction(parsed.repoHint, config);
 
         pi.sendUserMessage(
@@ -173,7 +274,7 @@ export default function (pi: ExtensionAPI) {
   // ── /bugfix-done command ───────────────────────────────────────
   pi.registerCommand("bugfix-done", {
     description:
-      'Merge MR(s), update ClickUp to "done", and optionally leave a comment.\n' +
+      'Merge MR(s), update ClickUp to "code review", and optionally leave a comment.\n' +
       "  /bugfix-done\n" +
       '  /bugfix-done "Went with the simple fix, no backend needed"',
     handler: async (args, ctx) => {
@@ -197,14 +298,12 @@ export default function (pi: ExtensionAPI) {
         const repo = config.repos[repoKey];
         if (!repo) continue;
 
-        const worktreePath = state.workspacePaths[repoKey];
         const platform = repo.platform || "gitlab";
 
         ctx.ui.notify(`Merging ${repoKey} MR...`, "info");
 
         try {
           if (platform === "gitlab") {
-            // Extract MR iid and project from URL: https://gitlab.com/anny.co/frontend/anny-ui/-/merge_requests/1619
             const iidMatch = mrUrl.match(/merge_requests\/(\d+)/);
             const projectMatch = mrUrl.match(/gitlab\.com\/(.+?)\/-\/merge_requests/);
             if (!iidMatch) {
@@ -227,7 +326,6 @@ export default function (pi: ExtensionAPI) {
               results.push(`${repoKey}: ✗ Merge failed — ${mergeResult.stderr || mergeResult.stdout}`);
             }
           } else {
-            // GitHub
             const prMatch = mrUrl.match(/pull\/(\d+)/);
             if (!prMatch) {
               results.push(`${repoKey}: ⚠ Could not parse PR number from ${mrUrl}`);
@@ -254,13 +352,11 @@ export default function (pi: ExtensionAPI) {
       // ── Update ClickUp ─────────────────────────────────────────
       if (bug.url && config.issueTracker.type !== "headless") {
         try {
-          // Post comment if provided
           if (comment) {
             await adapter.addComment(bug.id, `✅ Fix merged.\n\n${comment}`);
             results.push(`ClickUp: ✓ Comment posted`);
           }
 
-          // Update status
           await adapter.updateStatus(bug.id, "code review");
           results.push(`ClickUp: ✓ Status → code review`);
         } catch (err) {
@@ -269,8 +365,23 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
+      // ── Update status line ─────────────────────────────────────
+      if (ctx.hasUI) {
+        const theme = ctx.ui.theme;
+        ctx.ui.setStatus("bugfix", theme.fg("success", "✓ ") + theme.fg("dim", "bugfix done"));
+      }
+
       ctx.ui.notify(results.join("\n"), "info");
     },
+  });
+
+  // ── Update status line when MRs are created ────────────────────
+  pi.on("tool_result", async (event, ctx) => {
+    if (event.toolName === "create_mr" && state) {
+      // State was already updated by the tool — just refresh UI + persist
+      updateStatusLine(ctx);
+      persistState();
+    }
   });
 }
 
@@ -289,7 +400,6 @@ function parseArgs(input: string): ParsedArgs {
   let repoHint: string | undefined;
   let project: string | undefined;
 
-  // Tokenize respecting quoted strings
   const regex = /--project\s+(\S+)|repo=(\S+)|"([^"]+)"|'([^']+)'|(\S+)/g;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(input)) !== null) {
@@ -310,35 +420,22 @@ function parseArgs(input: string): ParsedArgs {
     throw new Error("No task ID or description provided.");
   }
 
-  // First token is the task ref. Determine if it's a tracker ID or free text.
   const firstToken = tokens[0];
   const isHeadless = isFreetextInput(firstToken);
 
-  // If headless with multiple tokens, join them all as the description
   const taskRef = isHeadless ? tokens.join(" ") : firstToken;
   const extraContext = isHeadless ? undefined : tokens.slice(1).join(" ") || undefined;
 
   return { taskRef, isHeadless, repoHint, project, extraContext };
 }
 
-/**
- * Determine if the input is free-text (headless) rather than a task ID.
- * A task ID looks like: CU-xxx, a short alphanumeric string, or a URL.
- */
 function isFreetextInput(input: string): boolean {
-  // ClickUp URL
   if (input.startsWith("http://") || input.startsWith("https://")) return false;
-  // CU-prefixed
   if (/^CU-/i.test(input)) return false;
-  // Short alphanumeric ID (up to 20 chars, no spaces)
   if (/^[a-z0-9]{1,20}$/i.test(input)) return false;
-  // Everything else is free text
   return true;
 }
 
-/**
- * Build repo routing instructions based on the optional hint.
- */
 function buildRepoInstruction(
   repoHint: string | undefined,
   config: ResolvedConfig,
