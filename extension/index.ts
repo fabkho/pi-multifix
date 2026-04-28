@@ -206,17 +206,22 @@ export default function (pi: ExtensionAPI) {
 
         try {
           if (platform === "gitlab") {
-            // Extract MR iid from URL: .../merge_requests/1619
+            // Extract MR iid and project from URL: https://gitlab.com/anny.co/frontend/anny-ui/-/merge_requests/1619
             const iidMatch = mrUrl.match(/merge_requests\/(\d+)/);
+            const projectMatch = mrUrl.match(/gitlab\.com\/(.+?)\/-\/merge_requests/);
             if (!iidMatch) {
               results.push(`${repoKey}: ⚠ Could not parse MR ID from ${mrUrl}`);
               continue;
             }
-            const mergeResult = await exec("glab", [
+            const glabArgs = [
               "mr", "merge", iidMatch[1],
               "--yes",
               "--remove-source-branch",
-            ], { timeout: 30000 });
+            ];
+            if (projectMatch) {
+              glabArgs.push("--repo", projectMatch[1]);
+            }
+            const mergeResult = await exec("glab", glabArgs, { timeout: 30000 });
 
             if (mergeResult.code === 0) {
               results.push(`${repoKey}: ✓ Merged ${mrUrl}`);
