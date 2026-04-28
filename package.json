@@ -1,9 +1,11 @@
 {
   "name": "pi-multifix",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Pi extension for multi-repo bugfixing — ClickUp to MR in one command",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -18,8 +20,12 @@
     "configs"
   ],
   "pi": {
-    "extensions": ["./extension/index.ts"],
-    "skills": ["./skills"]
+    "extensions": [
+      "./extension/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
   },
   "dependencies": {
     "yaml": "^2.7.0"
