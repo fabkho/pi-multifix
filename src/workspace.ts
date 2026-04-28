@@ -26,7 +26,9 @@ export function slugify(text: string): string {
 export function buildBranchSlug(taskId?: string, title?: string): string {
   if (taskId) {
     const slug = slugify(title || "bugfix");
-    return `fix/${taskId}_${slug}`;
+    // Prefix with CU- to trigger ClickUp automations
+    const normalizedId = taskId.startsWith("CU-") ? taskId : `CU-${taskId}`;
+    return `fix/${normalizedId}_${slug}`;
   }
   const slug = slugify(title || `bugfix-${Date.now()}`);
   return `fix/${slug}`;
