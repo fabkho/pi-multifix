@@ -11,6 +11,8 @@ export interface BugfixState {
   bug: Bug;
   adapter: IssueAdapter;
   workspacePaths: Record<string, string>;
+  /** MR/PR URLs created during this session, keyed by repo name */
+  createdMrs: Record<string, string>;
 }
 
 export type StateGetter = () => BugfixState | null;
@@ -166,6 +168,9 @@ export function registerCreateMrTool(
       const output = (createResult.stdout + "\n" + createResult.stderr).trim();
       const urlMatch = output.match(/https?:\/\/\S+/);
       const mrUrl = urlMatch ? urlMatch[0] : output;
+
+      // Track the MR URL in session state
+      state.createdMrs[params.repo] = mrUrl;
 
       return {
         content: [

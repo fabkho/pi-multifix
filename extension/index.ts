@@ -110,7 +110,7 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`Workspace ready:\n${pathSummary}`, "info");
 
         // ── 4. Store session state ───────────────────────────────
-        state = { config, bug, adapter, workspacePaths };
+        state = { config, bug, adapter, workspacePaths, createdMrs: {} };
 
         // ── 5. Render system prompt ──────────────────────────────
         pendingSystemPrompt = renderPrompt(config, bug, workspacePaths, {
@@ -160,8 +160,113 @@ export default function (pi: ExtensionAPI) {
         ...Object.entries(state.workspacePaths).map(
           ([name, p]) => `  - ${name}: ${p}`,
         ),
+        `**MRs:**`,
+        ...Object.entries(state.createdMrs).map(
+          ([name, url]) => `  - ${name}: ${url}`,
+        ),
       ];
+      if (Object.keys(state.createdMrs).length === 0) {
+        lines.push("  (none yet)");
+      }
       ctx.ui.notify(lines.join("\n"), "info");
+    },
+  });
+
+  // ── /bugfix-done command ───────────────────────────────────────
+  pi.registerCommand("bugfix-done", {
+    description:
+      'Merge MR(s), update ClickUp to "done", and optionally leave a comment.\n' +
+      "  /bugfix-done\n" +
+      '  /bugfix-done "Went with the simple fix, no backend needed"',
+    handler: async (args, ctx) => {
+      if (!state) {
+        ctx.ui.notify("No active bugfix session. Run /bugfix first.", "error");
+        return;
+      }
+
+      const comment = args?.trim() || undefined;
+      const { config, bug, adapter, createdMrs } = state;
+
+      if (Object.keys(createdMrs).length === 0) {
+        ctx.ui.notify("No MRs were created in this session — nothing to merge.", "warning");
+        return;
+      }
+
+      const results: string[] = [];
+
+      // ── Merge each MR ──────────────────────────────────────────
+      for (const [repoKey, mrUrl] of Object.entries(createdMrs)) {
+        const repo = config.repos[repoKey];
+        if (!repo) continue;
+
+        const worktreePath = state.workspacePaths[repoKey];
+        const platform = repo.platform || "gitlab";
+
+        ctx.ui.notify(`Merging ${repoKey} MR...`, "info");
+
+        try {
+          if (platform === "gitlab") {
+            // Extract MR iid from URL: .../merge_requests/1619
+            const iidMatch = mrUrl.match(/merge_requests\/(\d+)/);
+            if (!iidMatch) {
+              results.push(`${repoKey}: ⚠ Could not parse MR ID from ${mrUrl}`);
+              continue;
+            }
+            const mergeResult = await exec("glab", [
+              "mr", "merge", iidMatch[1],
+              "--yes",
+              "--remove-source-branch",
+            ], { timeout: 30000 });
+
+            if (mergeResult.code === 0) {
+              results.push(`${repoKey}: ✓ Merged ${mrUrl}`);
+            } else {
+              results.push(`${repoKey}: ✗ Merge failed — ${mergeResult.stderr || mergeResult.stdout}`);
+            }
+          } else {
+            // GitHub
+            const prMatch = mrUrl.match(/pull\/(\d+)/);
+            if (!prMatch) {
+              results.push(`${repoKey}: ⚠ Could not parse PR number from ${mrUrl}`);
+              continue;
+            }
+            const mergeResult = await exec("gh", [
+              "pr", "merge", prMatch[1],
+              "--merge",
+              "--delete-branch",
+            ], { timeout: 30000 });
+
+            if (mergeResult.code === 0) {
+              results.push(`${repoKey}: ✓ Merged ${mrUrl}`);
+            } else {
+              results.push(`${repoKey}: ✗ Merge failed — ${mergeResult.stderr || mergeResult.stdout}`);
+            }
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          results.push(`${repoKey}: ✗ ${msg}`);
+        }
+      }
+
+      // ── Update ClickUp ─────────────────────────────────────────
+      if (bug.url && config.issueTracker.type !== "headless") {
+        try {
+          // Post comment if provided
+          if (comment) {
+            await adapter.addComment(bug.id, `✅ Fix merged.\n\n${comment}`);
+            results.push(`ClickUp: ✓ Comment posted`);
+          }
+
+          // Update status
+          await adapter.updateStatus(bug.id, "code review");
+          results.push(`ClickUp: ✓ Status → code review`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          results.push(`ClickUp: ✗ ${msg}`);
+        }
+      }
+
+      ctx.ui.notify(results.join("\n"), "info");
     },
   });
 }
