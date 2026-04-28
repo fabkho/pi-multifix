@@ -2,6 +2,7 @@ name: anny
 
 issueTracker:
   type: clickup
+  doneStatus: code review
   clickup:
     tokenEnv: CLICKUP_API_TOKEN
 

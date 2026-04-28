@@ -31,6 +31,8 @@ export interface IssueTrackerConfig {
   type: "clickup" | "headless";
   /** Prefix for branch names (e.g., "CU-" for ClickUp, "LIN-" for Linear). Default: none */
   branchPrefix?: string;
+  /** Status to set when /bugfix-done runs (e.g., "code review", "done"). Default: none (skip status update) */
+  doneStatus?: string;
   /** Adapter-specific config — keyed by type name */
   [adapterType: string]: unknown;
 }
@@ -209,6 +211,8 @@ export function resolveConfig(projectName?: string): ResolvedConfig {
     branchPrefix: (rawTracker.branchPrefix as string | undefined)
       ?? DEFAULT_BRANCH_PREFIXES[trackerType]
       ?? undefined,
+    // Status to set on /bugfix-done
+    doneStatus: (rawTracker.doneStatus as string | undefined) ?? undefined,
     // Pass through the adapter-specific sub-object
     ...(rawTracker[trackerType] && typeof rawTracker[trackerType] === "object"
       ? { [trackerType]: rawTracker[trackerType] }

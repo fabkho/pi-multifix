@@ -3,7 +3,6 @@
  *
  * Registers:
  *   /bugfix <task-id|text> [repo=<name>] [--project <name>] [extra context...]
- *   /bugfix-status  — show current session state
  *   /bugfix-done [comment] — merge MRs, update tracker
  *   create_mr tool
  *   update_issue tool
@@ -242,59 +241,10 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ── /bugfix-status command ─────────────────────────────────────
-  pi.registerCommand("bugfix-status", {
-    description: "Show current bugfix session state. Pass MR URLs to add them manually:\n" +
-      "  /bugfix-status\n" +
-      "  /bugfix-status frontend=https://gitlab.com/.../merge_requests/123",
-    handler: async (args, ctx) => {
-      if (!state) {
-        ctx.ui.notify("No active bugfix session. Run /bugfix first.", "info");
-        return;
-      }
-
-      // Parse manual MR URL additions: frontend=https://...
-      if (args?.trim()) {
-        const pairs = args.trim().split(/\s+/);
-        for (const pair of pairs) {
-          const eqIdx = pair.indexOf("=");
-          if (eqIdx > 0) {
-            const repo = pair.slice(0, eqIdx);
-            const url = pair.slice(eqIdx + 1);
-            if (url.startsWith("http")) {
-              state.createdMrs[repo] = url;
-            }
-          }
-        }
-        updateStatusLine(ctx);
-        persistState();
-        ctx.ui.notify("MR URLs updated.", "info");
-      }
-
-      const lines = [
-        `**Project:** ${state.config.name}`,
-        `**Bug:** ${state.bug.title} (${state.bug.id})`,
-        `**Status:** ${state.bug.status}`,
-        `**Repos:**`,
-        ...Object.entries(state.workspacePaths).map(
-          ([name, p]) => `  - ${name}: ${p}`,
-        ),
-        `**MRs:**`,
-        ...Object.entries(state.createdMrs).map(
-          ([name, url]) => `  - ${name}: ${url}`,
-        ),
-      ];
-      if (Object.keys(state.createdMrs).length === 0) {
-        lines.push("  (none yet — add manually: /bugfix-status repo=https://...)");
-      }
-      ctx.ui.notify(lines.join("\n"), "info");
-    },
-  });
-
   // ── /bugfix-done command ───────────────────────────────────────
   pi.registerCommand("bugfix-done", {
     description:
-      'Merge MR(s), update ClickUp to "code review", and optionally leave a comment.\n' +
+      "Merge MR(s), update issue tracker, and optionally leave a comment.\n" +
       "  /bugfix-done\n" +
       '  /bugfix-done "Went with the simple fix, no backend needed"',
     handler: async (args, ctx) => {
@@ -379,19 +329,22 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      // ── Update ClickUp ─────────────────────────────────────────
+      // ── Update issue tracker ─────────────────────────────────────
       if (bug.url && config.issueTracker.type !== "headless") {
         try {
           if (comment) {
             await adapter.addComment(bug.id, `✅ Fix merged.\n\n${comment}`);
-            results.push(`ClickUp: ✓ Comment posted`);
+            results.push(`Tracker: ✓ Comment posted`);
           }
 
-          await adapter.updateStatus(bug.id, "code review");
-          results.push(`ClickUp: ✓ Status → code review`);
+          const doneStatus = config.issueTracker.doneStatus;
+          if (doneStatus) {
+            await adapter.updateStatus(bug.id, doneStatus);
+            results.push(`Tracker: ✓ Status → ${doneStatus}`);
+          }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          results.push(`ClickUp: ✗ ${msg}`);
+          results.push(`Tracker: ✗ ${msg}`);
         }
       }
 
