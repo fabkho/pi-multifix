@@ -15,6 +15,8 @@ export interface BugfixState {
   createdMrs: Record<string, string>;
   /** Buffered comment from update_issue — posted to tracker only after MRs are merged */
   pendingComment: string | null;
+  /** Buffered status from update_issue — applied to tracker only after MRs are merged */
+  pendingStatus: string | null;
 }
 
 export type StateGetter = () => BugfixState | null;
@@ -269,14 +271,18 @@ export function registerUpdateIssueTool(
         };
       }
 
-      // Buffer the comment — it will be posted to the tracker only after MRs are merged via /multifix-done
+      // Buffer the comment and status — both will be posted to the tracker only after MRs are merged via /multifix-done
       state.pendingComment = params.comment;
+      state.pendingStatus = params.status ?? null;
+
+      const buffered = [`comment`];
+      if (params.status) buffered.push(`status → "${params.status}"`);
 
       return {
         content: [
           {
             type: "text" as const,
-            text: `Comment buffered — will be posted to ${bug.url} after MRs are merged via /multifix-done.`,
+            text: `Buffered ${buffered.join(" and ")} — will be posted to ${bug.url} after MRs are merged via /multifix-done.`,
           },
         ],
         details: { skipped: false as boolean, bugId: bug.id as string | undefined, buffered: true as boolean },

@@ -37,6 +37,7 @@ interface PersistedState {
   workspacePaths: Record<string, string>;
   createdMrs: Record<string, string>;
   pendingComment: string | null;
+  pendingStatus: string | null;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -83,6 +84,7 @@ export default function (pi: ExtensionAPI) {
             workspacePaths: persisted.workspacePaths,
             createdMrs: persisted.createdMrs,
             pendingComment: persisted.pendingComment ?? null,
+            pendingStatus: persisted.pendingStatus ?? null,
           };
 
           // Restore status line
@@ -150,6 +152,7 @@ export default function (pi: ExtensionAPI) {
       workspacePaths: state.workspacePaths,
       createdMrs: state.createdMrs,
       pendingComment: state.pendingComment,
+      pendingStatus: state.pendingStatus,
     };
     pi.appendEntry("bugfix-state", persisted);
   }
@@ -209,7 +212,7 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`Workspace ready:\n${pathSummary}`, "info");
 
         // ── 4. Store session state ───────────────────────────────
-        state = { config, bug, adapter, workspacePaths, createdMrs: {}, pendingComment: null };
+        state = { config, bug, adapter, workspacePaths, createdMrs: {}, pendingComment: null, pendingStatus: null };
 
         // ── 5. Name the session + status line ────────────────────
         const sessionLabel = !bug.id.startsWith("headless")
@@ -272,6 +275,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       const results: string[] = [];
+      let mergeSuccess = true;
 
       // ── Merge each MR ──────────────────────────────────────────
       for (const [repoKey, mrUrl] of Object.entries(createdMrs)) {
@@ -306,8 +310,10 @@ export default function (pi: ExtensionAPI) {
               const errMsg = (mergeResult.stderr + " " + mergeResult.stdout).toLowerCase();
               if (errMsg.includes("401") || errMsg.includes("403") || errMsg.includes("forbidden") || errMsg.includes("not allowed") || errMsg.includes("unauthorized")) {
                 results.push(`${repoKey}: ⚠ No merge rights — skipped (${mrUrl})`);
+                mergeSuccess = false;
               } else {
                 results.push(`${repoKey}: ✗ Merge failed — ${mergeResult.stderr || mergeResult.stdout}`);
+                mergeSuccess = false;
               }
             }
           } else {
@@ -328,50 +334,62 @@ export default function (pi: ExtensionAPI) {
               const errMsg = (mergeResult.stderr + " " + mergeResult.stdout).toLowerCase();
               if (errMsg.includes("403") || errMsg.includes("forbidden") || errMsg.includes("not allowed") || errMsg.includes("unauthorized")) {
                 results.push(`${repoKey}: ⚠ No merge rights — skipped (${mrUrl})`);
+                mergeSuccess = false;
               } else {
                 results.push(`${repoKey}: ✗ Merge failed — ${mergeResult.stderr || mergeResult.stdout}`);
+                mergeSuccess = false;
               }
             }
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           results.push(`${repoKey}: ✗ ${msg}`);
+          mergeSuccess = false;
         }
       }
 
       // ── Post buffered comment to issue tracker ────────────────────
       if (bug.url && config.issueTracker.type !== "headless") {
-        const pendingComment = state.pendingComment;
-        const userComment = args?.trim() || undefined;
+        if (!mergeSuccess) {
+          results.push(`Tracker: ⚠ Skipped — one or more merges failed`);
+        } else {
+          const pendingComment = state.pendingComment;
+          const pendingStatus = state.pendingStatus;
+          const userComment = args?.trim() || undefined;
 
-        // Combine the buffered MR comment with any user-supplied note
-        const fullComment = [
-          pendingComment,
-          userComment ? `\n${userComment}` : null,
-        ]
-          .filter(Boolean)
-          .join("")
-          .trim();
+          // Combine the buffered MR comment with any user-supplied note
+          const fullComment = [
+            pendingComment,
+            userComment ? `\n${userComment}` : null,
+          ]
+            .filter(Boolean)
+            .join("")
+            .trim();
 
-        if (fullComment) {
-          try {
-            await adapter.addComment(bug.id, `✅ Fix merged.\n\n${fullComment}`);
-            results.push(`Tracker: ✓ Comment posted`);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            results.push(`Tracker: ✗ Failed to post comment — ${msg}`);
+          if (fullComment) {
+            try {
+              await adapter.addComment(bug.id, `✅ Fix merged.\n\n${fullComment}`);
+              state.pendingComment = null;
+              results.push(`Tracker: ✓ Comment posted`);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              results.push(`Tracker: ✗ Failed to post comment — ${msg}`);
+            }
           }
-        }
 
-        const doneStatus = config.issueTracker.doneStatus;
-        if (doneStatus) {
-          try {
-            await adapter.updateStatus(bug.id, doneStatus);
-            results.push(`Tracker: ✓ Status → ${doneStatus}`);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            results.push(`Tracker: ✗ Failed to update status — ${msg}`);
+          const doneStatus = pendingStatus ?? config.issueTracker.doneStatus;
+          if (doneStatus) {
+            try {
+              await adapter.updateStatus(bug.id, doneStatus);
+              state.pendingStatus = null;
+              results.push(`Tracker: ✓ Status → ${doneStatus}`);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              results.push(`Tracker: ✗ Failed to update status — ${msg}`);
+            }
           }
+
+          persistState();
         }
       }
 
@@ -396,6 +414,12 @@ export default function (pi: ExtensionAPI) {
         updateStatusLine(ctx);
         persistState();
       }
+    }
+
+    if (event.toolName === "update_issue") {
+      // pendingComment/pendingStatus were already set by the tool execute;
+      // persist now so a reload before /multifix-done doesn't lose them
+      persistState();
     }
 
     // Catch MR/PR URLs created via bash fallback (agent used glab/gh directly)
