@@ -13,6 +13,8 @@ export interface BugfixState {
   workspacePaths: Record<string, string>;
   /** MR/PR URLs created during this session, keyed by repo name */
   createdMrs: Record<string, string>;
+  /** Buffered comment from update_issue — posted to tracker only after MRs are merged */
+  pendingComment: string | null;
 }
 
 export type StateGetter = () => BugfixState | null;
@@ -255,7 +257,7 @@ export function registerUpdateIssueTool(
         throw new Error("Multifix session not active — run /multifix first");
       }
 
-      const { bug, adapter } = state;
+      const { bug } = state;
 
       // Headless mode: no real issue tracker
       if (!bug.url || state.config.issueTracker.type === "headless") {
@@ -263,41 +265,21 @@ export function registerUpdateIssueTool(
           content: [
             { type: "text" as const, text: "No issue tracker — skipping update." },
           ],
-          details: { skipped: true as boolean, bugId: undefined as string | undefined, statusUpdated: undefined as boolean | undefined },
+          details: { skipped: true as boolean, bugId: undefined as string | undefined, buffered: false as boolean },
         };
       }
 
-      // Post comment
-      try {
-        await adapter.addComment(bug.id, params.comment);
-      } catch (err) {
-        throw new Error(
-          `Failed to post comment to ${bug.id}: ${(err as Error).message}`,
-        );
-      }
+      // Buffer the comment — it will be posted to the tracker only after MRs are merged via /multifix-done
+      state.pendingComment = params.comment;
 
-      // Update status if provided
-      if (params.status) {
-        try {
-          await adapter.updateStatus(bug.id, params.status);
-        } catch (err) {
-          throw new Error(
-            `Comment posted, but failed to update status to "${params.status}": ${(err as Error).message}`,
-          );
-        }
-      }
-
-      const statusMsg = params.status
-        ? ` and status updated to "${params.status}"`
-        : "";
       return {
         content: [
           {
             type: "text" as const,
-            text: `Comment posted to ${bug.url}${statusMsg}.`,
+            text: `Comment buffered — will be posted to ${bug.url} after MRs are merged via /multifix-done.`,
           },
         ],
-        details: { skipped: false as boolean, bugId: bug.id as string | undefined, statusUpdated: !!params.status as boolean | undefined },
+        details: { skipped: false as boolean, bugId: bug.id as string | undefined, buffered: true as boolean },
       };
     },
 
@@ -327,16 +309,14 @@ export function registerUpdateIssueTool(
         return text;
       }
       const details = result.details as
-        | { skipped?: boolean; statusUpdated?: boolean }
+        | { skipped?: boolean; buffered?: boolean }
         | undefined;
       if (details?.skipped) {
         text.setText(theme.fg("muted", "No issue tracker — skipped"));
+      } else if (details?.buffered) {
+        text.setText(theme.fg("warning", "⏳ Comment buffered — posts after merge"));
       } else {
-        let msg = theme.fg("success", "✓ Comment posted");
-        if (details?.statusUpdated) {
-          msg += theme.fg("dim", " + status updated");
-        }
-        text.setText(msg);
+        text.setText(theme.fg("success", "✓ Comment posted"));
       }
       return text;
     },

@@ -5,7 +5,7 @@ A [pi](https://github.com/badlogic/pi-mono) extension for fixing bugs across mul
 ## Features
 
 - **Multi-repo** — works across multiple repositories in a single session using absolute paths
-- **ClickUp integration** — fetches bug details, posts MR links back, updates task status
+- **ClickUp integration** — fetches bug details, posts MR links after merge, updates task status
 - **Headless mode** — describe a bug in free text without an issue tracker
 - **Git worktree isolation** — each bug gets its own branches, your working copy stays clean
 - **Auto-symlinks** — `node_modules` and `vendor/` symlinked from main repo for instant setup
@@ -65,11 +65,13 @@ ln -sf "$(npm root -g)/pi-multifix/agents/bugfix-scout.md" ~/.pi/agent/agents/bu
 ### Merge and close
 
 ```
-/multifix-done                                              # merge MR(s), update tracker
-/multifix-done "Simple i18n fix, no backend changes needed"  # with a comment
+/multifix-done                                              # merge MR(s), post buffered comment, update tracker
+/multifix-done "Simple i18n fix, no backend changes needed"  # append a note to the posted comment
 ```
 
-Merges all MR(s) created in the session, updates issue tracker status (if `doneStatus` configured), and optionally posts your comment.
+Merges all MR(s) created in the session, then posts the buffered `update_issue` comment to the tracker (with `✅ Fix merged.` prepended). Updates issue status if `doneStatus` is configured. Any note passed to `/multifix-done` is appended to the comment.
+
+> **Note:** `update_issue` does **not** post to ClickUp immediately — it buffers the comment until `/multifix-done` runs. This ensures nothing is posted to the tracker before the fix is actually merged.
 
 ## What happens when you run `/multifix`
 
@@ -81,7 +83,8 @@ Merges all MR(s) created in the session, updates issue tracker status (if `doneS
 6. **The agent analyzes** the bug across all repos, determines root cause
 7. **Fixes the code**, using scout subagents for research to keep context lean
 8. **Creates MR(s)** via `glab mr create` / `gh pr create`
-9. **Posts MR links** back to the issue tracker
+9. **Buffers the MR comment** — `update_issue` stores the comment in session state, nothing is posted yet
+10. **`/multifix-done`** merges all MRs, then flushes the buffered comment to the tracker
 
 ## Project Config
 
@@ -181,7 +184,7 @@ Adding new adapters (GitHub Issues, Linear, Jira) means implementing the `IssueA
 | Tool | Description |
 |------|-------------|
 | `create_mr` | Commit + push + open MR/PR for a repo |
-| `update_issue` | Post a comment or update status on the issue tracker |
+| `update_issue` | Buffer a comment for the issue tracker — flushed to ClickUp only when `/multifix-done` runs after merge |
 
 ## Default System Prompt
 

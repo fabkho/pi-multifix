@@ -36,6 +36,7 @@ interface PersistedState {
   trackerConfig: Record<string, unknown>;
   workspacePaths: Record<string, string>;
   createdMrs: Record<string, string>;
+  pendingComment: string | null;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -81,6 +82,7 @@ export default function (pi: ExtensionAPI) {
             adapter,
             workspacePaths: persisted.workspacePaths,
             createdMrs: persisted.createdMrs,
+            pendingComment: persisted.pendingComment ?? null,
           };
 
           // Restore status line
@@ -147,6 +149,7 @@ export default function (pi: ExtensionAPI) {
       trackerConfig: state.config.issueTracker as unknown as Record<string, unknown>,
       workspacePaths: state.workspacePaths,
       createdMrs: state.createdMrs,
+      pendingComment: state.pendingComment,
     };
     pi.appendEntry("bugfix-state", persisted);
   }
@@ -206,7 +209,7 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`Workspace ready:\n${pathSummary}`, "info");
 
         // ── 4. Store session state ───────────────────────────────
-        state = { config, bug, adapter, workspacePaths, createdMrs: {} };
+        state = { config, bug, adapter, workspacePaths, createdMrs: {}, pendingComment: null };
 
         // ── 5. Name the session + status line ────────────────────
         const sessionLabel = !bug.id.startsWith("headless")
@@ -261,7 +264,6 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      const comment = args?.trim() || undefined;
       const { config, bug, adapter, createdMrs } = state;
 
       if (Object.keys(createdMrs).length === 0) {
@@ -337,22 +339,39 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      // ── Update issue tracker ─────────────────────────────────────
+      // ── Post buffered comment to issue tracker ────────────────────
       if (bug.url && config.issueTracker.type !== "headless") {
-        try {
-          if (comment) {
-            await adapter.addComment(bug.id, `✅ Fix merged.\n\n${comment}`);
-            results.push(`Tracker: ✓ Comment posted`);
-          }
+        const pendingComment = state.pendingComment;
+        const userComment = args?.trim() || undefined;
 
-          const doneStatus = config.issueTracker.doneStatus;
-          if (doneStatus) {
+        // Combine the buffered MR comment with any user-supplied note
+        const fullComment = [
+          pendingComment,
+          userComment ? `\n${userComment}` : null,
+        ]
+          .filter(Boolean)
+          .join("")
+          .trim();
+
+        if (fullComment) {
+          try {
+            await adapter.addComment(bug.id, `✅ Fix merged.\n\n${fullComment}`);
+            results.push(`Tracker: ✓ Comment posted`);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            results.push(`Tracker: ✗ Failed to post comment — ${msg}`);
+          }
+        }
+
+        const doneStatus = config.issueTracker.doneStatus;
+        if (doneStatus) {
+          try {
             await adapter.updateStatus(bug.id, doneStatus);
             results.push(`Tracker: ✓ Status → ${doneStatus}`);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            results.push(`Tracker: ✗ Failed to update status — ${msg}`);
           }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          results.push(`Tracker: ✗ ${msg}`);
         }
       }
 
