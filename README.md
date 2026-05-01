@@ -1,36 +1,37 @@
-# pi-multifix
+# pi-multirepo
 
-A [pi](https://github.com/badlogic/pi-mono) extension for fixing bugs across multiple repositories. Fetches issues from ClickUp (or free-text), creates isolated git worktree workspaces, analyzes and fixes the bug, creates merge requests, and posts results back to the issue tracker.
+A [pi](https://github.com/badlogic/pi-mono) extension for working across multiple repositories. Fetches tasks from ClickUp (or free-text), creates isolated git worktree workspaces, implements the changes, runs pre-MR hooks, creates merge requests, and runs post-merge hooks (tracker comments, status updates, custom scripts).
 
 ## Features
 
 - **Multi-repo** — works across multiple repositories in a single session using absolute paths
-- **ClickUp integration** — fetches bug details, posts MR links after merge, updates task status
-- **Headless mode** — describe a bug in free text without an issue tracker
-- **Git worktree isolation** — each bug gets its own branches, your working copy stays clean
+- **ClickUp integration** — fetches task details, posts MR links after merge, updates task status
+- **Headless mode** — describe a task in free text without an issue tracker
+- **Git worktree isolation** — each task gets its own branches, your working copy stays clean
 - **Auto-symlinks** — `node_modules` and `vendor/` symlinked from main repo for instant setup
+- **preMRHooks** — per-repo hooks (linters, formatters, tests) run before each `create_mr`
+- **postMergeHooks** — project-level hooks after `/multirepo-merge` (tracker comments, status updates, shell scripts)
+- **State widget** — persistent display above the editor showing task, repos, and MR progress
 - **MR/PR creation** — `create_mr` tool pushes and opens merge requests via `glab` (GitLab) or `gh` (GitHub)
-- **Scout subagents** — delegates research to cheaper/faster models via [@tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents)
+- **Scout subagents** — delegates research to cheaper/faster models via the `Agent` tool
 - **Project configs** — YAML-based per-project configuration, reusable across different multi-repo setups
-- **Session persistence** — multifix state survives reloads and session resume
-- **Status line** — footer shows active bug + MR count
+- **Session persistence** — multirepo state survives reloads and session resume
 
 ## Install
 
 ```bash
-pi install npm:pi-multifix
+pi install npm:pi-multirepo
 ```
 
 Or from git:
 
 ```bash
-pi install git:github.com/fabkho/pi-multifix
+pi install git:github.com/fabkho/pi-multirepo
 ```
 
 ### Prerequisites
 
 - [pi](https://github.com/badlogic/pi-mono)
-- [@tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents) (`pi install npm:@tintinweb/pi-subagents`)
 - `glab` (GitLab CLI) and/or `gh` (GitHub CLI) installed and authenticated
 - `CLICKUP_API_TOKEN` environment variable set (for ClickUp mode)
 
@@ -38,59 +39,58 @@ pi install git:github.com/fabkho/pi-multifix
 
 ```bash
 # 1. Create your project config
-mkdir -p ~/.config/pi-multifix
-cp configs/anny.yaml ~/.config/pi-multifix/my-project.yaml
+mkdir -p ~/.config/pi-multirepo
+cp configs/anny.yaml ~/.config/pi-multirepo/my-project.yaml
 # Edit with your repos, paths, tokens
 
 # 2. Set a default project (optional — avoids --project flag)
-echo "my-project" > ~/.config/pi-multifix/default
-
-# 3. Symlink the scout agent (optional — for subagent research)
-ln -sf "$(npm root -g)/pi-multifix/agents/bugfix-scout.md" ~/.pi/agent/agents/bugfix-scout.md
+echo "my-project" > ~/.config/pi-multirepo/default
 ```
 
 ## Usage
 
-### Fix a bug
+### Start a task
 
 ```
-/multifix CU-12345                                          # ClickUp task ID
-/multifix CU-12345 repo=frontend                            # hint which repo is affected
-/multifix CU-12345 repo=backend "The API returns 500"       # with extra context
-/multifix https://app.clickup.com/t/86abc123                # ClickUp URL
-/multifix "The booking modal crashes on save"                # headless mode (no tracker)
-/multifix --project other-project CU-99999                   # different project config
+/multirepo CU-12345                                          # ClickUp task ID
+/multirepo CU-12345 repo=frontend                            # hint which repo is affected
+/multirepo CU-12345 repo=backend "The API returns 500"       # with extra context
+/multirepo https://app.clickup.com/t/86abc123                # ClickUp URL
+/multirepo "Add dark mode toggle to settings page"           # headless mode (no tracker)
+/multirepo --project other-project CU-99999                  # different project config
 ```
 
-### Merge and close
+### Merge and run post-merge hooks
 
 ```
-/multifix-done                                              # merge MR(s), post buffered comment, update tracker
-/multifix-done "Simple i18n fix, no backend changes needed"  # append a note to the posted comment
+/multirepo-merge                                             # merge MR(s), run postMergeHooks
+/multirepo-merge "Simple i18n fix, no backend changes"       # append a note to the tracker comment
 ```
 
-Merges all MR(s) created in the session, then posts the buffered `update_issue` comment to the tracker (with `✅ Fix merged.` prepended). Updates issue status if `doneStatus` is configured. Any note passed to `/multifix-done` is appended to the comment.
+Merges all MR(s) created in the session, then runs `postMergeHooks` in order. Any note passed to `/multirepo-merge` is appended to the tracker comment.
 
-> **Note:** `update_issue` does **not** post to ClickUp immediately — it buffers the comment until `/multifix-done` runs. This ensures nothing is posted to the tracker before the fix is actually merged.
+> **Note:** `update_issue` does **not** post to the tracker immediately — it buffers the comment until `/multirepo-merge` runs. This ensures nothing is posted before the changes are actually merged.
 
-## What happens when you run `/multifix`
+## What happens when you run `/multirepo`
 
-1. **Loads project config** from `~/.config/pi-multifix/<project>.yaml`
-2. **Fetches the bug** from ClickUp (or creates a headless bug from your text)
+1. **Loads project config** from `~/.config/pi-multirepo/<project>.yaml`
+2. **Fetches the task** from ClickUp (or creates a headless task from your text)
 3. **Creates worktrees** for each repo on a fresh branch
 4. **Symlinks** `node_modules` and `vendor/` from the main repos
-5. **Injects a system prompt** with repo paths, codebase conventions, and workflow instructions
-6. **The agent analyzes** the bug across all repos, determines root cause
-7. **Fixes the code**, using scout subagents for research to keep context lean
-8. **Creates MR(s)** via `glab mr create` / `gh pr create`
-9. **Buffers the MR comment** — `update_issue` stores the comment in session state, nothing is posted yet
-10. **`/multifix-done`** merges all MRs, then flushes the buffered comment to the tracker
+5. **Shows the state widget** — task ID, title, repos, MR progress
+6. **Injects a system prompt** with repo paths, codebase conventions, and workflow instructions
+7. **The agent analyzes** the task across all repos
+8. **Implements the changes**, using scout subagents for research to keep context lean
+9. **Runs preMRHooks** (linters, formatters, tests) per repo before committing
+10. **Creates MR(s)** via `glab mr create` / `gh pr create`
+11. **Buffers the tracker comment** — `update_issue` stores the comment in session state
+12. **`/multirepo-merge`** merges all MRs, then runs `postMergeHooks`
 
 ## Project Config
 
-YAML config files live at `~/.config/pi-multifix/<name>.yaml`.
+YAML config files live at `~/.config/pi-multirepo/<name>.yaml`.
 
-### Minimal config (defaults handle the rest)
+### Minimal config
 
 ```yaml
 name: my-project
@@ -112,37 +112,80 @@ name: my-project
 
 issueTracker:
   type: clickup                       # clickup | headless (default: headless)
-  doneStatus: code review             # status set by /multifix-done (default: skip)
   branchPrefix: CU-                   # auto-set per tracker type, override here
-  clickup:                            # adapter-specific config nested under type name
+  clickup:
     tokenEnv: CLICKUP_API_TOKEN       # env var holding the API token
-  # linear:                           # future: Linear adapter config
-  #   tokenEnv: LINEAR_API_KEY
-  #   teamId: TEAM_123
 
 repos:
   frontend:
-    path: ~/code/my-project/frontend  # required — path to the repo
+    path: ~/code/my-project/frontend  # required
     remote: origin                    # default: origin
     baseBranch: main                  # default: main
     platform: gitlab                  # gitlab | github (default: gitlab)
     contextFiles:                     # files read into the agent's system prompt
       - .github/copilot-instructions.md
-      - AGENTS.md
+    preMRHooks:                       # run before create_mr for this repo
+      - cmd: yarn
+        args: [lint:fix]
   backend:
     path: ~/code/my-project/backend
     contextFiles:
       - .github/copilot-instructions.md
+      - AGENTS.md
+    preMRHooks:
+      - cmd: ./vendor/bin/pint
+      - cmd: ./vendor/bin/phpstan
+        args: [analyse, --memory-limit=2G]
+
+postMergeHooks:                       # run after /multirepo-merge
+  - type: clickup-comment             # posts the comment the agent wrote via update_issue
+  - type: clickup-status
+    status: code review
+  # - cmd: ./scripts/notify-slack.sh  # arbitrary shell command
 
 workspace:
-  root: ~/code/my-project/worktrees   # where worktrees are created
+  root: ~/code/my-project/worktrees
   # script: ~/bin/create-workspace.sh # optional custom creation script
 
 agent:
-  model: claude-opus-4.6              # default: claude-opus-4.6
-  thinking: high                      # default: high
-  scoutModel: claude-sonnet-4.6       # default: claude-sonnet-4.6
-  # promptTemplate: ~/custom-prompt.md # override the default system prompt
+  model: claude-opus-4.6
+  thinking: high
+  scoutModel: claude-sonnet-4.6
+  # promptTemplate: ~/custom-prompt.md
+```
+
+### Hooks
+
+#### preMRHooks (per repo)
+
+Run in the worktree directory before `create_mr` stages and commits. If a hook exits non-zero, the MR creation is aborted.
+
+```yaml
+preMRHooks:
+  - cmd: ./vendor/bin/pint              # auto-fix code style
+  - cmd: ./vendor/bin/phpstan
+    args: [analyse, --memory-limit=2G]
+  - cmd: yarn
+    args: [test]
+    failOnError: false                  # warn only, don't block the MR
+```
+
+#### postMergeHooks (project level)
+
+Run after `/multirepo-merge` successfully merges all MRs. Supports built-in types and shell commands:
+
+| Type | Description |
+|------|-------------|
+| `clickup-comment` | Posts the buffered `update_issue` comment to ClickUp |
+| `clickup-status` | Sets the ClickUp task status (requires `status` field) |
+| shell (`cmd`) | Runs an arbitrary command |
+
+```yaml
+postMergeHooks:
+  - type: clickup-comment
+  - type: clickup-status
+    status: code review
+  - cmd: ./scripts/deploy-staging.sh
 ```
 
 ### Defaults
@@ -151,7 +194,6 @@ agent:
 |-------|---------|
 | `issueTracker.type` | `headless` |
 | `issueTracker.branchPrefix` | `CU-` (clickup), none (headless) |
-| `issueTracker.doneStatus` | none (skip status update) |
 | `repos.*.remote` | `origin` |
 | `repos.*.baseBranch` | `main` |
 | `repos.*.platform` | `gitlab` |
@@ -163,8 +205,8 @@ agent:
 ### Config resolution order
 
 1. `--project <name>` flag on the command
-2. `MULTIFIX_PROJECT` environment variable
-3. `~/.config/pi-multifix/default` file contents
+2. `MULTIREPO_PROJECT` environment variable
+3. `~/.config/pi-multirepo/default` file contents
 
 ### Context files
 
@@ -177,97 +219,14 @@ Each repo can specify `contextFiles` — paths relative to the repo root (e.g., 
 | `clickup` | Task ID, CU-prefix, or URL | Fetches from ClickUp API, posts comments, updates status |
 | `headless` | Quoted free text | No tracker — just a description. `addComment`/`updateStatus` are no-ops |
 
-Adding new adapters (GitHub Issues, Linear, Jira) means implementing the `IssueAdapter` interface in `src/adapters/`. PRs for additional tracker integrations are welcome!
+Adding new adapters (GitHub Issues, Linear, Jira) means implementing the `IssueAdapter` interface in `src/adapters/`. PRs welcome!
 
 ## Tools registered
 
 | Tool | Description |
 |------|-------------|
-| `create_mr` | Commit + push + open MR/PR for a repo |
-| `update_issue` | Buffer a comment for the issue tracker — flushed to ClickUp only when `/multifix-done` runs after merge |
-
-## Default System Prompt
-
-The agent receives this system prompt (with variables substituted) for each multifix session. Override it per-project via `agent.promptTemplate` in the config.
-
-<details>
-<summary>Click to expand the default prompt template</summary>
-
-```markdown
-# Bugfix Agent — {{project.name}}
-
-## Your Role
-
-You are an automated multifix agent working across multiple repositories. Your job is to analyze a bug report, identify the root cause across all repos, implement the fix, and create merge requests.
-
-## Workspace Layout
-
-{{repos_overview}}
-
-## Bug Report
-
-**ID:** {{bug.id}}
-**Title:** {{bug.title}}
-**URL:** {{bug.url}}
-
-### Description
-
-{{bug.description}}
-
-### Comments
-
-{{bug.comments}}
-
-{{#if repo_hint}}
-## Repo Hint
-
-{{repo_hint}}
-{{/if}}
-
-{{#if extra_context}}
-## Additional Context
-
-{{extra_context}}
-{{/if}}
-
-## Codebase Conventions
-
-{{repos_context}}
-
-## Workflow
-
-1. **Analyze**: Read the bug report carefully. Use the `Agent` tool with `subagent_type: "Explore"` to scout relevant code across repos if needed. Keep your own context focused on the fix.
-2. **Plan**: Determine which repo(s) need changes. State your plan before coding.
-3. **Fix**: Make the minimal fix. Don't refactor unrelated code. Use absolute paths for all file operations.
-4. **Verify**: Run linters and tests if available in the repo.
-5. **Commit & MR**: Use the `create_mr` tool for each repo that has changes. Include the bug tracker URL in MR descriptions.
-6. **Update tracker**: Use the `update_issue` tool to post MR links back to the issue tracker.
-
-## Rules
-
-- Use **ABSOLUTE PATHS** for all file operations (read, edit, write, bash cd)
-- Make minimal changes — fix the bug, don't refactor
-- If a fix spans multiple repos, note deployment order in MR descriptions
-- Always include the bug tracker URL in MR descriptions
-- Branch naming is handled by the workspace — just commit and use `create_mr`
-- If you are unsure about something, investigate before making changes
-
-## Scout Subagents
-
-Use the `Agent` tool to delegate research tasks:
-
-    Agent({ subagent_type: "Explore", prompt: "Find all usages of X in <path>", description: "Find X usages" })
-
-Use scouts for:
-- Broad searches across large codebases
-- Understanding unfamiliar code or dependencies
-- Reading and summarizing large files
-- Tracing call chains across repos
-
-Keep your own context lean — delegate exploration, retain only the findings you need.
-```
-
-</details>
+| `create_mr` | Run preMRHooks + commit + push + open MR/PR for a repo |
+| `update_issue` | Buffer a tracker comment — posted when `/multirepo-merge` runs the `clickup-comment` hook |
 
 ## License
 
