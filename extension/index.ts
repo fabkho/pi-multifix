@@ -451,6 +451,58 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // ── /cu command ─ lightweight ClickUp context injection ───────────
+  pi.registerCommand("cu", {
+    description:
+      "Fetch a ClickUp task and inject it as context (no worktrees, no MRs).\n" +
+      "  /cu CU-12345\n" +
+      "  /cu https://app.clickup.com/t/86abc123\n" +
+      "  /cu CU-12345 --project other",
+    handler: async (args, ctx) => {
+      if (!args?.trim()) {
+        ctx.ui.notify("Usage: /cu <task-id|URL> [--project <name>]", "warning");
+        return;
+      }
+
+      try {
+        // Parse --project flag
+        let project: string | undefined;
+        let taskRef = args.trim();
+        const projectMatch = taskRef.match(/--project\s+(\S+)/);
+        if (projectMatch) {
+          project = projectMatch[1];
+          taskRef = taskRef.replace(projectMatch[0], "").trim();
+        }
+
+        if (!taskRef) {
+          ctx.ui.notify("No task ID provided.", "error");
+          return;
+        }
+
+        const config = resolveConfig(project);
+        const adapter = createAdapter(config.issueTracker);
+
+        ctx.ui.notify(`Fetching ${taskRef}...`, "info");
+        const task = await adapter.fetchIssue(taskRef);
+
+        pi.sendUserMessage(
+          `# ClickUp Task\n\n` +
+            `**${task.title}** (${task.id})\n` +
+            (task.url ? `${task.url}\n\n` : "\n") +
+            (task.status ? `**Status:** ${task.status}\n\n` : "") +
+            `${task.description}\n\n` +
+            (task.comments.length > 0
+              ? `## Comments\n${task.comments.map((c) => `- ${c}`).join("\n")}\n\n`
+              : "") +
+            `Task context loaded. How would you like to proceed?`,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.ui.notify(`/cu error: ${msg}`, "error");
+      }
+    },
+  });
+
   // ── Update state when MRs are created ───────────────────────────
   pi.on("tool_result", async (event, ctx) => {
     if (!state) return;
