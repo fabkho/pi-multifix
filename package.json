@@ -1,9 +1,11 @@
 {
   "name": "pi-multirepo",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Pi extension for multi-repo tasks — worktrees, MRs, and tracker integration in one command",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
