@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/fabkho/pi-multirepo/compare/pi-multirepo-0.3.0...pi-multirepo-0.3.1) (2026-05-01)
+
+
+### Bug Fixes
+
+* normalize repository URL in package.json ([db49252](https://github.com/fabkho/pi-multirepo/commit/db4925239fa19026f69c93fb5822fc5141f72bef))
+
 ## [0.3.0](https://github.com/fabkho/pi-multifix/compare/pi-multirepo-0.2.0...pi-multirepo-0.3.0) (2026-05-01)
 
 
