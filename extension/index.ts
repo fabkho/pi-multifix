@@ -376,8 +376,10 @@ export default function (pi: ExtensionAPI) {
       }
 
       // ── Run post-merge hooks ────────────────────────────────────────
+      let hooksSkipped = false;
       if (!mergeSuccess) {
         results.push(`Hooks: ⚠ Skipped — one or more merges failed`);
+        hooksSkipped = true;
       } else {
         const hooks = config.postMergeHooks ?? [];
         const userComment = args?.trim() || undefined;
@@ -405,13 +407,17 @@ export default function (pi: ExtensionAPI) {
                 results.push(`Hook: ✓ ClickUp status → ${status}`);
               }
             } else {
-              // Shell hook
+              // Shell hook — run through /bin/sh for pipes/&&/redirects
               if (hook.cmd) {
-                const cmdParts = hook.cmd.trim().split(/\s+/);
-                const hookArgs = [...cmdParts.slice(1), ...(hook.args ?? [])];
-                const hookResult = await exec(cmdParts[0], hookArgs, { timeout: 30000 });
-                if (hookResult.code !== 0 && hook.failOnError !== false) {
+                const fullCmd = hook.args?.length
+                  ? `${hook.cmd} ${hook.args.join(" ")}`
+                  : hook.cmd;
+                const hookResult = await exec("/bin/sh", ["-c", fullCmd], { timeout: 30000 });
+                if (hookResult.code !== 0) {
                   results.push(`Hook: ✗ ${hook.cmd} failed`);
+                  if (hook.failOnError !== false) {
+                    throw new Error(`Post-merge hook failed: ${hook.cmd}\n${hookResult.stderr || hookResult.stdout}`);
+                  }
                 } else {
                   results.push(`Hook: ✓ ${hook.cmd}`);
                 }
@@ -420,6 +426,10 @@ export default function (pi: ExtensionAPI) {
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             results.push(`Hook: ✗ ${hook.type ?? hook.cmd} — ${msg}`);
+            if (hook.failOnError !== false) {
+              mergeSuccess = false;
+              break;
+            }
           }
         }
 
@@ -429,8 +439,12 @@ export default function (pi: ExtensionAPI) {
       // ── Update status line ─────────────────────────────────────
       if (ctx.hasUI) {
         const theme = ctx.ui.theme;
-        ctx.ui.setStatus("multirepo", theme.fg("success", "✓ ") + theme.fg("dim", "multirepo done"));
-        ctx.ui.setWidget("multirepo-state", undefined);
+        if (mergeSuccess && !hooksSkipped) {
+          ctx.ui.setStatus("multirepo", theme.fg("success", "✓ ") + theme.fg("dim", "multirepo done"));
+          ctx.ui.setWidget("multirepo-state", undefined);
+        } else {
+          ctx.ui.setStatus("multirepo", theme.fg("error", "✗ ") + theme.fg("dim", "merge incomplete — check results"));
+        }
       }
 
       ctx.ui.notify(results.join("\n"), "info");

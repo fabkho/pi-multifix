@@ -93,6 +93,7 @@ export interface ResolvedConfig extends Omit<ProjectConfig, "repos"> {
 // ── Helpers ──────────────────────────────────────────────────────────
 
 const CONFIG_DIR = join(homedir(), ".config", "pi-multirepo");
+const LEGACY_CONFIG_DIR = join(homedir(), ".config", "pi-multifix");
 
 /** Default branch prefixes per tracker type (for automation triggers) */
 const DEFAULT_BRANCH_PREFIXES: Record<string, string> = {
@@ -121,11 +122,12 @@ function readFileSafe(path: string): string | undefined {
 function resolveProjectName(explicit?: string): string {
   if (explicit) return explicit;
 
-  const fromEnv = process.env.MULTIREPO_PROJECT;
+  const fromEnv = process.env.MULTIREPO_PROJECT ?? process.env.MULTIFIX_PROJECT;
   if (fromEnv) return fromEnv;
 
   const defaultFile = join(CONFIG_DIR, "default");
-  const fromFile = readFileSafe(defaultFile)?.trim();
+  const legacyDefaultFile = join(LEGACY_CONFIG_DIR, "default");
+  const fromFile = readFileSafe(defaultFile)?.trim() ?? readFileSafe(legacyDefaultFile)?.trim();
   if (fromFile) return fromFile;
 
   throw new Error(
@@ -139,12 +141,17 @@ function resolveProjectName(explicit?: string): string {
 export function resolveConfig(projectName?: string): ResolvedConfig {
   const name = resolveProjectName(projectName);
   const configPath = join(CONFIG_DIR, `${name}.yaml`);
+  const legacyConfigPath = join(LEGACY_CONFIG_DIR, `${name}.yaml`);
 
-  if (!existsSync(configPath)) {
+  const resolvedPath = existsSync(configPath) ? configPath
+    : existsSync(legacyConfigPath) ? legacyConfigPath
+    : null;
+
+  if (!resolvedPath) {
     throw new Error(`Config file not found: ${configPath}`);
   }
 
-  const raw = readFileSync(configPath, "utf-8");
+  const raw = readFileSync(resolvedPath, "utf-8");
 
   let parsed: Record<string, unknown>;
   try {
@@ -226,11 +233,19 @@ export function resolveConfig(projectName?: string): ResolvedConfig {
 
     // Pre-commit checks
     if (Array.isArray(repo.preMRHooks)) {
-      repoConfig.preMRHooks = (repo.preMRHooks as Array<Record<string, unknown>>).map((c) => ({
-        cmd: c.cmd as string,
-        args: Array.isArray(c.args) ? (c.args as string[]) : undefined,
-        failOnError: c.failOnError !== false,
-      }));
+      repoConfig.preMRHooks = (repo.preMRHooks as Array<Record<string, unknown>>).map((c, i) => {
+        if (typeof c.cmd !== "string" || !c.cmd.trim()) {
+          throw new Error(`Repo "${repoKey}": preMRHooks[${i}].cmd must be a non-empty string`);
+        }
+        if (c.args !== undefined && !Array.isArray(c.args)) {
+          throw new Error(`Repo "${repoKey}": preMRHooks[${i}].args must be an array`);
+        }
+        return {
+          cmd: c.cmd.trim(),
+          args: Array.isArray(c.args) ? (c.args as string[]).map(String) : undefined,
+          failOnError: c.failOnError !== false,
+        };
+      });
     }
 
     resolvedRepos[repoKey] = repoConfig;
@@ -257,13 +272,25 @@ export function resolveConfig(projectName?: string): ResolvedConfig {
 
   const rawPostMergeHooks = parsed.postMergeHooks ?? parsed.post_merge_hooks;
   const postMergeHooks: PostMergeHook[] | undefined = Array.isArray(rawPostMergeHooks)
-    ? (rawPostMergeHooks as Array<Record<string, unknown>>).map((h) => ({
-        type: h.type as PostMergeHookType | undefined,
-        cmd: h.cmd as string | undefined,
-        args: Array.isArray(h.args) ? (h.args as string[]) : undefined,
-        status: h.status as string | undefined,
-        failOnError: h.failOnError !== false,
-      }))
+    ? (rawPostMergeHooks as Array<Record<string, unknown>>).map((h, i) => {
+        const hookType = h.type as PostMergeHookType | undefined;
+        // Shell hooks must have cmd
+        if (!hookType || hookType === "shell") {
+          if (typeof h.cmd !== "string" || !h.cmd.trim()) {
+            throw new Error(`postMergeHooks[${i}]: shell hook requires a non-empty "cmd"`);
+          }
+        }
+        if (h.args !== undefined && !Array.isArray(h.args)) {
+          throw new Error(`postMergeHooks[${i}].args must be an array`);
+        }
+        return {
+          type: hookType,
+          cmd: typeof h.cmd === "string" ? h.cmd.trim() : undefined,
+          args: Array.isArray(h.args) ? (h.args as string[]).map(String) : undefined,
+          status: h.status as string | undefined,
+          failOnError: h.failOnError !== false,
+        };
+      })
     : undefined;
 
   // ── Workspace ───────────────────────────────────────────────────
