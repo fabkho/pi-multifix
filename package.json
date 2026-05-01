@@ -1,11 +1,9 @@
 {
-  "name": "pi-multifix",
+  "name": "pi-multirepo",
   "version": "0.2.0",
   "type": "module",
-  "description": "Pi extension for multi-repo bugfixing — ClickUp to MR in one command",
-  "keywords": [
-    "pi-package"
-  ],
+  "description": "Pi extension for multi-repo tasks — worktrees, MRs, and tracker integration in one command",
+  "keywords": ["pi-package"],
   "license": "MIT",
   "repository": {
     "type": "git",

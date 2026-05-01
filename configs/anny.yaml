@@ -2,7 +2,6 @@ name: anny
 
 issueTracker:
   type: clickup
-  doneStatus: code review
   clickup:
     tokenEnv: CLICKUP_API_TOKEN
 
@@ -11,15 +10,23 @@ repos:
     path: ~/code/anny/anny-ui
     contextFiles:
       - .github/copilot-instructions.md
+    preMRHooks:
+      - cmd: yarn
+        args: [lint:fix]
   backend:
     path: ~/code/anny/bookings-api
     contextFiles:
       - .github/copilot-instructions.md
       - AGENTS.md
-    preCommitChecks:
+    preMRHooks:
       - cmd: ./vendor/bin/pint
       - cmd: ./vendor/bin/phpstan
         args: [analyse, --memory-limit=2G]
+
+postMergeHooks:
+  - type: clickup-comment   # agent writes this via update_issue during implementation
+  - type: clickup-status
+    status: code review
 
 workspace:
   root: ~/code/anny/worktrees

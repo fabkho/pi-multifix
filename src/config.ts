@@ -5,12 +5,26 @@ import { parse as parseYaml } from "yaml";
 
 // ── Interfaces ───────────────────────────────────────────────────────
 
-export interface PreCommitCheck {
+export interface PreMRHook {
   /** Shell command to run (e.g. "./vendor/bin/pint") */
   cmd: string;
   /** Extra arguments appended to cmd */
   args?: string[];
-  /** Block the commit if this check exits non-zero. Default: true */
+  /** Block the MR if this hook exits non-zero. Default: true */
+  failOnError?: boolean;
+}
+
+export type PostMergeHookType = "clickup-comment" | "clickup-status" | "shell";
+
+export interface PostMergeHook {
+  /** Built-in hook type, or omit for shell */
+  type?: PostMergeHookType;
+  /** Shell command — used when type is omitted or "shell" */
+  cmd?: string;
+  args?: string[];
+  /** Status value — used with type: clickup-status */
+  status?: string;
+  /** Block on failure. Default: true */
   failOnError?: boolean;
 }
 
@@ -23,7 +37,7 @@ export interface RepoConfig {
   contextFiles?: string[];
   platform: "gitlab" | "github";
   /** Commands to run in the worktree before git add / commit */
-  preCommitChecks?: PreCommitCheck[];
+  preMRHooks?: PreMRHook[];
 }
 
 export interface WorkspaceConfig {
@@ -65,6 +79,7 @@ export interface ProjectConfig {
   issueTracker: IssueTrackerConfig;
   workspace: WorkspaceConfig;
   agent: AgentConfig;
+  postMergeHooks?: PostMergeHook[];
 }
 
 export interface ResolvedRepoConfig extends RepoConfig {
@@ -210,8 +225,8 @@ export function resolveConfig(projectName?: string): ResolvedConfig {
     }
 
     // Pre-commit checks
-    if (Array.isArray(repo.preCommitChecks)) {
-      repoConfig.preCommitChecks = (repo.preCommitChecks as Array<Record<string, unknown>>).map((c) => ({
+    if (Array.isArray(repo.preMRHooks)) {
+      repoConfig.preMRHooks = (repo.preMRHooks as Array<Record<string, unknown>>).map((c) => ({
         cmd: c.cmd as string,
         args: Array.isArray(c.args) ? (c.args as string[]) : undefined,
         failOnError: c.failOnError !== false,
@@ -227,21 +242,29 @@ export function resolveConfig(projectName?: string): ResolvedConfig {
   const trackerType = (rawTracker.type as string) ?? "headless";
   const issueTracker: IssueTrackerConfig = {
     type: trackerType as "clickup" | "headless",
-    // Branch prefix: explicit config > type default > none
     branchPrefix: (rawTracker.branchPrefix as string | undefined)
       ?? DEFAULT_BRANCH_PREFIXES[trackerType]
       ?? undefined,
-    // Status to set on /multifix-done
-    doneStatus: (rawTracker.doneStatus as string | undefined) ?? undefined,
-    // Pass through the adapter-specific sub-object
     ...(rawTracker[trackerType] && typeof rawTracker[trackerType] === "object"
       ? { [trackerType]: rawTracker[trackerType] }
       : {}),
-    // Backwards compat: top-level tokenEnv → clickup.tokenEnv
     ...(trackerType === "clickup" && rawTracker.tokenEnv && !rawTracker.clickup
       ? { clickup: { tokenEnv: rawTracker.tokenEnv } }
       : {}),
   };
+
+  // ── Post-merge hooks ────────────────────────────────────────────
+
+  const rawPostMergeHooks = parsed.postMergeHooks ?? parsed.post_merge_hooks;
+  const postMergeHooks: PostMergeHook[] | undefined = Array.isArray(rawPostMergeHooks)
+    ? (rawPostMergeHooks as Array<Record<string, unknown>>).map((h) => ({
+        type: h.type as PostMergeHookType | undefined,
+        cmd: h.cmd as string | undefined,
+        args: Array.isArray(h.args) ? (h.args as string[]) : undefined,
+        status: h.status as string | undefined,
+        failOnError: h.failOnError !== false,
+      }))
+    : undefined;
 
   // ── Workspace ───────────────────────────────────────────────────
 
@@ -269,5 +292,6 @@ export function resolveConfig(projectName?: string): ResolvedConfig {
     issueTracker,
     workspace,
     agent,
+    postMergeHooks,
   };
 }

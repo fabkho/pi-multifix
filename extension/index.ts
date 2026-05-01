@@ -1,9 +1,9 @@
 /**
- * pi-multifix — Pi extension for multi-repo fixing.
+ * pi-multirepo — Pi extension for multi-repo tasks.
  *
  * Registers:
- *   /multifix <task-id|text> [repo=<name>] [--project <name>] [extra context...]
- *   /multifix-done [comment] — merge MRs, update tracker
+ *   /multirepo <task-id|text> [repo=<name>] [--project <name>] [extra context...]
+ *   /multirepo-merge [comment] — merge MRs, update tracker
  *   create_mr tool
  *   update_issue tool
  */
@@ -102,8 +102,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async (_event, ctx) => {
     state = null;
     if (ctx.hasUI) {
-      ctx.ui.setStatus("multifix", undefined);
-      ctx.ui.setWidget("multifix-state", undefined);
+      ctx.ui.setStatus("multirepo", undefined);
+      ctx.ui.setWidget("multirepo-state", undefined);
     }
   });
 
@@ -132,7 +132,7 @@ export default function (pi: ExtensionAPI) {
       : "";
 
     ctx.ui.setStatus(
-      "multifix",
+      "multirepo",
       theme.fg("accent", "🔧 ") +
       theme.fg("dim", taskLabel) +
       theme.fg("muted", ` | ${repos}`) +
@@ -140,7 +140,7 @@ export default function (pi: ExtensionAPI) {
     );
 
     // Widget: one persistent line above the editor
-    ctx.ui.setWidget("multifix-state", (_tui: any, theme: any) => ({
+    ctx.ui.setWidget("multirepo-state", (_tui: any, theme: any) => ({
       render(width: number): string[] {
         if (!state) return [];
         const id = !state.bug.id.startsWith("headless") ? state.bug.id + " " : "";
@@ -184,18 +184,18 @@ export default function (pi: ExtensionAPI) {
     pi.appendEntry("bugfix-state", persisted);
   }
 
-  // ── /multifix command ────────────────────────────────────────────
-  pi.registerCommand("multifix", {
+  // ── /multirepo command ────────────────────────────────────────────
+  pi.registerCommand("multirepo", {
     description:
       "Fix a bug across repos. Usage:\n" +
-      "  /multifix CU-12345\n" +
-      "  /multifix CU-12345 repo=frontend \"Extra context\"\n" +
-      '  /multifix "The booking modal crashes on save"\n' +
-      "  /multifix --project other CU-99999",
+      "  /multirepo CU-12345\n" +
+      "  /multirepo CU-12345 repo=frontend \"Extra context\"\n" +
+      '  /multirepo "The booking modal crashes on save"\n' +
+      "  /multirepo --project other CU-99999",
     handler: async (args, ctx) => {
       if (!args?.trim()) {
         ctx.ui.notify(
-          "Usage: /multifix <task-id|URL|text> [repo=<name>] [--project <name>] [context...]",
+          "Usage: /multirepo <task-id|URL|text> [repo=<name>] [--project <name>] [context...]",
           "warning",
         );
         return;
@@ -277,20 +277,20 @@ export default function (pi: ExtensionAPI) {
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        ctx.ui.notify(`/multifix error: ${msg}`, "error");
+        ctx.ui.notify(`/multirepo error: ${msg}`, "error");
       }
     },
   });
 
-  // ── /multifix-done command ───────────────────────────────────────
-  pi.registerCommand("multifix-done", {
+  // ── /multirepo-merge command ───────────────────────────────────────
+  pi.registerCommand("multirepo-merge", {
     description:
       "Merge MR(s), update issue tracker, and optionally leave a comment.\n" +
-      "  /multifix-done\n" +
-      '  /multifix-done "Went with the simple fix, no backend needed"',
+      "  /multirepo-merge\n" +
+      '  /multirepo-merge "Went with the simple fix, no backend needed"',
     handler: async (args, ctx) => {
       if (!state) {
-        ctx.ui.notify("No active multifix session. Run /multifix first.", "error");
+        ctx.ui.notify("No active multirepo session. Run /multirepo first.", "error");
         return;
       }
 
@@ -375,56 +375,62 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      // ── Post buffered comment to issue tracker ────────────────────
-      if (bug.url && config.issueTracker.type !== "headless") {
-        if (!mergeSuccess) {
-          results.push(`Tracker: ⚠ Skipped — one or more merges failed`);
-        } else {
-          const pendingComment = state.pendingComment;
-          const pendingStatus = state.pendingStatus;
-          const userComment = args?.trim() || undefined;
+      // ── Run post-merge hooks ────────────────────────────────────────
+      if (!mergeSuccess) {
+        results.push(`Hooks: ⚠ Skipped — one or more merges failed`);
+      } else {
+        const hooks = config.postMergeHooks ?? [];
+        const userComment = args?.trim() || undefined;
 
-          // Combine the buffered MR comment with any user-supplied note
-          const fullComment = [
-            pendingComment,
-            userComment ? `\n${userComment}` : null,
-          ]
-            .filter(Boolean)
-            .join("")
-            .trim();
+        for (const hook of hooks) {
+          try {
+            if (hook.type === "clickup-comment") {
+              if (!bug.url || config.issueTracker.type === "headless") continue;
+              const fullComment = [
+                state.pendingComment,
+                userComment ? `\n${userComment}` : null,
+              ].filter(Boolean).join("").trim();
 
-          if (fullComment) {
-            try {
-              await adapter.addComment(bug.id, `✅ Fix merged.\n\n${fullComment}`);
-              state.pendingComment = null;
-              results.push(`Tracker: ✓ Comment posted`);
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              results.push(`Tracker: ✗ Failed to post comment — ${msg}`);
+              if (fullComment) {
+                await adapter.addComment(bug.id, `✅ Merged.\n\n${fullComment}`);
+                state.pendingComment = null;
+                results.push(`Hook: ✓ ClickUp comment posted`);
+              }
+            } else if (hook.type === "clickup-status") {
+              if (!bug.url || config.issueTracker.type === "headless") continue;
+              const status = state.pendingStatus ?? hook.status;
+              if (status) {
+                await adapter.updateStatus(bug.id, status);
+                state.pendingStatus = null;
+                results.push(`Hook: ✓ ClickUp status → ${status}`);
+              }
+            } else {
+              // Shell hook
+              if (hook.cmd) {
+                const cmdParts = hook.cmd.trim().split(/\s+/);
+                const hookArgs = [...cmdParts.slice(1), ...(hook.args ?? [])];
+                const hookResult = await exec(cmdParts[0], hookArgs, { timeout: 30000 });
+                if (hookResult.code !== 0 && hook.failOnError !== false) {
+                  results.push(`Hook: ✗ ${hook.cmd} failed`);
+                } else {
+                  results.push(`Hook: ✓ ${hook.cmd}`);
+                }
+              }
             }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            results.push(`Hook: ✗ ${hook.type ?? hook.cmd} — ${msg}`);
           }
-
-          const doneStatus = pendingStatus ?? config.issueTracker.doneStatus;
-          if (doneStatus) {
-            try {
-              await adapter.updateStatus(bug.id, doneStatus);
-              state.pendingStatus = null;
-              results.push(`Tracker: ✓ Status → ${doneStatus}`);
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              results.push(`Tracker: ✗ Failed to update status — ${msg}`);
-            }
-          }
-
-          persistState();
         }
+
+        persistState();
       }
 
       // ── Update status line ─────────────────────────────────────
       if (ctx.hasUI) {
         const theme = ctx.ui.theme;
-        ctx.ui.setStatus("multifix", theme.fg("success", "✓ ") + theme.fg("dim", "multifix done"));
-        ctx.ui.setWidget("multifix-state", undefined);
+        ctx.ui.setStatus("multirepo", theme.fg("success", "✓ ") + theme.fg("dim", "multirepo done"));
+        ctx.ui.setWidget("multirepo-state", undefined);
       }
 
       ctx.ui.notify(results.join("\n"), "info");
@@ -446,7 +452,7 @@ export default function (pi: ExtensionAPI) {
 
     if (event.toolName === "update_issue") {
       // pendingComment/pendingStatus were already set by the tool execute;
-      // persist now so a reload before /multifix-done doesn't lose them
+      // persist now so a reload before /multirepo-merge doesn't lose them
       persistState();
     }
 

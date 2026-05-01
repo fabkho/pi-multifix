@@ -83,7 +83,7 @@ export function registerCreateMrTool(
       }
 
       // ── Pre-commit checks ─────────────────────────────────────
-      const checks = repoConfig.preCommitChecks ?? [];
+      const checks = repoConfig.preMRHooks ?? [];
       for (const check of checks) {
         const cmdParts = check.cmd.trim().split(/\s+/);
         const checkArgs = [...cmdParts.slice(1), ...(check.args ?? [])];
